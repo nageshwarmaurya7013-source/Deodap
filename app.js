@@ -1,10 +1,53 @@
-const KEYS = {
-  catalog: "deodap.catalog",
-  cart: "deodap.cart",
-  favs: "deodap.favs",
-  orders: "deodap.orders",
+const APP_KEYS = {
   firebase: "deodap.firebaseConfig",
   firebaseOff: "deodap.firebaseOff",
+}
+
+const WORKSPACES = {
+  deodap: {
+    id: "deodap",
+    name: "DeoDap",
+    title: "DeoDap Orders",
+    blurb: "Shopify cart JSON (test.json). Sale cards, favourites, View like cart review.",
+    jsonHint: 'Shopify cart { "items": [ { "sku", "title", "price", "image", "product_description" } ] }. Unique id is sku. Prices are paise.',
+    parse: "shopify",
+    prefix: "deodap",
+    features: { favourites: true, saleBadges: true, hsn: false, importFillsCart: false },
+  },
+  paarth: {
+    id: "paarth",
+    name: "Paarth",
+    title: "Paarth Orders",
+    blurb: "Order-sheet JSON: item_code, name, HSN, qty, rate in rupees. Import can fill the cart.",
+    jsonHint: '{ "items": [ { "item_code", "name", "hsn", "qty", "rate", "mrp", "image" } ] }. Unique id is item_code / sku. Rate is rupees, not paise.',
+    parse: "sheet",
+    prefix: "paarth",
+    features: { favourites: false, saleBadges: true, hsn: true, importFillsCart: true },
+  },
+}
+
+let activeWorkspace = ""
+
+function currentWs() {
+  return WORKSPACES[activeWorkspace] || WORKSPACES.deodap
+}
+
+function keys() {
+  const p = currentWs().prefix
+  return {
+    catalog: `${p}.catalog`,
+    cart: `${p}.cart`,
+    favs: `${p}.favs`,
+    orders: `${p}.orders`,
+    firebase: APP_KEYS.firebase,
+    firebaseOff: APP_KEYS.firebaseOff,
+  }
+}
+
+function path(to) {
+  const id = currentWs().id
+  if (!to || to === "/") return `#/${id}/`
+  return `#/${id}/${String(to).replace(/^\//, "")}`
 }
 
 const rupees = new Intl.NumberFormat("en-IN", {
@@ -39,7 +82,7 @@ function load(key, fallback) {
 
 function save(key, value, syncCloud = true) {
   localStorage.setItem(key, JSON.stringify(value))
-  if (syncCloud && key !== KEYS.firebase) scheduleCloudWrite()
+  if (syncCloud && key !== keys().firebase && key !== APP_KEYS.firebase && key !== APP_KEYS.firebaseOff) scheduleCloudWrite()
 }
 
 const cloud = {
@@ -109,10 +152,10 @@ function parseFirebaseConfig(text) {
 function applyCloudState(data) {
   if (!data || typeof data !== "object") return
   cloud.applying = true
-  if (Array.isArray(data.catalog)) save(KEYS.catalog, data.catalog, false)
-  if (Array.isArray(data.cart)) save(KEYS.cart, data.cart, false)
-  if (Array.isArray(data.favs)) save(KEYS.favs, data.favs, false)
-  if (Array.isArray(data.orders)) save(KEYS.orders, data.orders, false)
+  if (Array.isArray(data.catalog)) save(keys().catalog, data.catalog, false)
+  if (Array.isArray(data.cart)) save(keys().cart, data.cart, false)
+  if (Array.isArray(data.favs)) save(keys().favs, data.favs, false)
+  if (Array.isArray(data.orders)) save(keys().orders, data.orders, false)
   cloud.applying = false
 }
 
@@ -120,11 +163,11 @@ async function pushCloudNow() {
   if (!cloud.db) return
   cloud.writing = true
   try {
-    await cloud.db.collection("deodap").doc("state").set({
-      catalog: load(KEYS.catalog, []),
-      cart: load(KEYS.cart, []),
-      favs: load(KEYS.favs, []),
-      orders: load(KEYS.orders, []),
+    await cloud.db.collection(currentWs().prefix).doc("state").set({
+      catalog: load(keys().catalog, []),
+      cart: load(keys().cart, []),
+      favs: load(keys().favs, []),
+      orders: load(keys().orders, []),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     })
   } finally {
@@ -147,8 +190,8 @@ function scheduleCloudWrite() {
 }
 
 function firebaseConfigToUse() {
-  if (load(KEYS.firebaseOff, false)) return null
-  const saved = load(KEYS.firebase, null)
+  if (load(keys().firebaseOff, false)) return null
+  const saved = load(keys().firebase, null)
   const baked = window.DEODAP_FIREBASE
   const raw = saved && saved.apiKey ? saved : baked
   if (!raw || !raw.apiKey) return null
@@ -182,7 +225,7 @@ async function connectFirebase() {
     if (firebase.apps.length) await firebase.app().delete()
     firebase.initializeApp(cfg)
     cloud.db = firebase.firestore()
-    const ref = cloud.db.collection("deodap").doc("state")
+    const ref = cloud.db.collection(currentWs().prefix).doc("state")
     const snap = await ref.get()
     if (snap.exists) applyCloudState(snap.data())
     else await pushCloudNow()
@@ -209,8 +252,8 @@ async function connectFirebase() {
 
 async function saveFirebaseConfig(text) {
   const cfg = parseFirebaseConfig(text)
-  localStorage.removeItem(KEYS.firebaseOff)
-  localStorage.setItem(KEYS.firebase, JSON.stringify(cfg))
+  localStorage.removeItem(keys().firebaseOff)
+  localStorage.setItem(keys().firebase, JSON.stringify(cfg))
   await connectFirebase()
 }
 
@@ -221,8 +264,8 @@ function disconnectFirebase() {
   cloud.status = "local"
   cloud.error = ""
   cloud.projectId = ""
-  localStorage.setItem(KEYS.firebaseOff, JSON.stringify(true))
-  localStorage.removeItem(KEYS.firebase)
+  localStorage.setItem(keys().firebaseOff, JSON.stringify(true))
+  localStorage.removeItem(keys().firebase)
   if (window.firebase && firebase.apps.length) firebase.app().delete().catch(() => {})
 }
 
@@ -323,24 +366,62 @@ function extractItemRows(parsed) {
   if (parsed.cart && Array.isArray(parsed.cart.items)) return parsed.cart.items
   if (Array.isArray(parsed.line_items)) return parsed.line_items
   if (Array.isArray(parsed.products)) return parsed.products
+  if (Array.isArray(parsed.rows)) return parsed.rows
+  if (Array.isArray(parsed.order_items)) return parsed.order_items
+  if (parsed.order && Array.isArray(parsed.order.items)) return parsed.order.items
+  if (Array.isArray(parsed.data)) return parsed.data
   return null
+}
+
+function rupeesToMinor(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.round(n * 100)
+}
+
+function normalizeSheetItem(raw, index = 0) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const sku = String(raw.item_code || raw.sku || raw.code || raw.product_code || raw.ItemCode || "").trim()
+  if (!sku) return null
+  const price = rupeesToMinor(raw.rate ?? raw.price ?? raw.sale_price ?? raw.Amount)
+  const mrp = rupeesToMinor(raw.mrp ?? raw.MRP ?? raw.original_price)
+  return {
+    sku,
+    title: decodeHtml(raw.name || raw.product_name || raw.title || raw.item || "Untitled"),
+    vendor: decodeHtml(raw.vendor || raw.brand || raw.party || "Paarth"),
+    type: decodeHtml(raw.product_type || raw.category || raw.type || ""),
+    price,
+    originalPrice: mrp > price ? mrp : price,
+    grams: Number(raw.grams) || 0,
+    image: raw.image || featuredImageUrl(raw) || "",
+    description: decodeHtml(raw.description || raw.product_description || ""),
+    hsn: String(raw.hsn || raw.hsn_code || raw.HSN || ""),
+    qtyHint: Math.max(0, Math.round(Number(raw.qty ?? raw.quantity ?? raw.Qty) || 0)),
+    handle: String(raw.handle || ""),
+    index,
+  }
 }
 
 function parseCatalogJson(text) {
   const parsed = parseJsonText(text)
   const arr = extractItemRows(parsed)
+  const sheet = currentWs().parse === "sheet"
   if (!arr) {
-    throw new Error('JSON must match test.json: a Shopify cart with an "items" array, or a raw items array.')
+    throw new Error(sheet
+      ? 'JSON must be an order sheet with "items" (item_code, name, rate, qty, hsn).'
+      : 'JSON must match test.json: a Shopify cart with an "items" array, or a raw items array.')
   }
   const items = []
   const seen = new Set()
   arr.forEach((raw, index) => {
-    const item = normalizeItem(raw, index)
+    const item = sheet ? normalizeSheetItem(raw, index) : normalizeItem(raw, index)
     if (!item || seen.has(item.sku)) return
     seen.add(item.sku)
     items.push(item)
   })
-  if (!items.length) throw new Error("No items with a sku were found in that JSON.")
+  if (!items.length) {
+    throw new Error(sheet ? "No items with an item_code / sku were found." : "No items with a sku were found in that JSON.")
+  }
   return items
 }
 
@@ -348,38 +429,44 @@ let searchQ = ""
 
 function state() {
   return {
-    catalog: load(KEYS.catalog, SAMPLE),
-    cart: load(KEYS.cart, []),
-    favs: load(KEYS.favs, []),
-    orders: load(KEYS.orders, []),
+    catalog: load(keys().catalog, currentWs().id === "deodap" ? SAMPLE : []),
+    cart: load(keys().cart, []),
+    favs: load(keys().favs, []),
+    orders: load(keys().orders, []),
   }
 }
 
 function writeCatalog(catalog) {
-  save(KEYS.catalog, catalog)
+  save(keys().catalog, catalog)
 }
 
 function writeCart(cart) {
-  save(KEYS.cart, cart)
+  save(keys().cart, cart)
 }
 
 function writeFavs(favs) {
-  save(KEYS.favs, favs)
+  save(keys().favs, favs)
 }
 
 function writeOrders(orders) {
-  save(KEYS.orders, orders)
+  save(keys().orders, orders)
 }
 
 function route() {
   const hash = (location.hash || "#/").replace(/^#/, "")
   const parts = hash.split("/").filter(Boolean)
-  if (parts[0] === "item" && parts[1]) return { name: "item", sku: decodeURIComponent(parts[1]) }
-  if (parts[0] === "cart") return { name: "cart" }
-  if (parts[0] === "orders" && parts[1]) return { name: "order", id: decodeURIComponent(parts[1]) }
-  if (parts[0] === "orders") return { name: "orders" }
-  if (parts[0] === "favourites") return { name: "favourites" }
-  if (parts[0] === "account") return { name: "account" }
+  if (!parts[0] || !WORKSPACES[parts[0]]) {
+    activeWorkspace = ""
+    return { name: "pick" }
+  }
+  activeWorkspace = parts[0]
+  const rest = parts.slice(1)
+  if (rest[0] === "item" && rest[1]) return { name: "item", sku: decodeURIComponent(rest[1]) }
+  if (rest[0] === "cart") return { name: "cart" }
+  if (rest[0] === "orders" && rest[1]) return { name: "order", id: decodeURIComponent(rest[1]) }
+  if (rest[0] === "orders") return { name: "orders" }
+  if (rest[0] === "favourites") return { name: "favourites" }
+  if (rest[0] === "account") return { name: "account" }
   return { name: "home" }
 }
 
@@ -400,7 +487,7 @@ function cartQty(cart, sku) {
 function setCartQty(sku, qty, catalog) {
   const item = catalog.find((row) => row.sku === sku)
   if (!item) return
-  const cart = load(KEYS.cart, [])
+  const cart = load(keys().cart, [])
   const nextQty = Math.max(0, Math.floor(Number(qty) || 0))
   const others = cart.filter((line) => line.sku !== sku)
   if (nextQty > 0) others.push({ sku, qty: nextQty })
@@ -408,14 +495,14 @@ function setCartQty(sku, qty, catalog) {
 }
 
 function toggleFav(sku) {
-  const favs = load(KEYS.favs, [])
+  const favs = load(keys().favs, [])
   writeFavs(favs.includes(sku) ? favs.filter((id) => id !== sku) : [...favs, sku])
 }
 
 function removeItem(sku) {
-  writeCatalog(load(KEYS.catalog, []).filter((item) => item.sku !== sku))
-  writeCart(load(KEYS.cart, []).filter((line) => line.sku !== sku))
-  writeFavs(load(KEYS.favs, []).filter((id) => id !== sku))
+  writeCatalog(load(keys().catalog, []).filter((item) => item.sku !== sku))
+  writeCart(load(keys().cart, []).filter((line) => line.sku !== sku))
+  writeFavs(load(keys().favs, []).filter((id) => id !== sku))
 }
 
 function createOrder() {
@@ -464,18 +551,19 @@ function productCard(item, { qty, fav }) {
   return `<article class="product" data-sku="${esc(item.sku)}">
     <div class="media">
       ${item.image ? `<img alt="" src="${esc(item.image)}" />` : ""}
-      ${pct ? `<span class="sale">Sale ${pct}%</span>` : ""}
-      <button class="heart ${fav ? "on" : ""}" data-act="fav" title="Favourite" aria-label="Favourite">♥</button>
+      ${currentWs().features.saleBadges && pct ? `<span class="sale">Sale ${pct}%</span>` : ""}
+      ${currentWs().features.favourites ? `<button class="heart ${fav ? "on" : ""}" data-act="fav" title="Favourite" aria-label="Favourite">♥</button>` : ""}
     </div>
     <div class="body">
       <div class="title">${esc(item.title)}</div>
-      <div class="sku">SKU : ${esc(item.sku)}</div>
+      <div class="sku">${currentWs().parse === "sheet" ? "Code" : "SKU"} : ${esc(item.sku)}</div>
+      ${currentWs().features.hsn && item.hsn ? `<div class="sku">HSN : ${esc(item.hsn)}</div>` : ""}
       <div class="prices">
         <span class="now">${fmt(item.price)}</span>
         ${item.originalPrice > item.price ? `<span class="was">${fmt(item.originalPrice)}</span>` : ""}
       </div>
       <div class="actions">
-        <a class="btn ghost" href="#/item/${encodeURIComponent(item.sku)}">View</a>
+        <a class="btn ghost" href="${path("item/" + encodeURIComponent(item.sku))}">View</a>
         ${
           qty > 0
             ? `<div class="qty">
@@ -499,9 +587,9 @@ function reviewCards(items, qtyMap) {
       return `<article class="card">
         ${item.image ? `<img class="thumb" alt="" src="${esc(item.image)}" />` : `<div class="thumb"></div>`}
         <div class="card-body">
-          <div class="sku-lg">SKU : ${esc(item.sku)}</div>
+          <div class="sku-lg">${currentWs().parse === "sheet" ? "Code" : "SKU"} : ${esc(item.sku)}</div>
           <div class="name">${esc(item.title)}</div>
-          <div class="meta">${esc(item.vendor || "—")} · ${esc(item.type || "—")}</div>
+          <div class="meta">${esc(item.vendor || "—")}${item.type ? ` · ${esc(item.type)}` : ""}${item.hsn ? ` · HSN ${esc(item.hsn)}` : ""}</div>
           <div class="card-prices">
             <span>Qty <strong>${qty}</strong></span>
             <span>Unit <strong>${fmt(item.price)}</strong></span>
@@ -541,7 +629,7 @@ function bindCatalog(root, catalog) {
       const act = event.target.closest("[data-act]")
       if (!act) return
       event.preventDefault()
-      const current = cartQty(load(KEYS.cart, []), sku)
+      const current = cartQty(load(keys().cart, []), sku)
       if (act.dataset.act === "fav") toggleFav(sku)
       if (act.dataset.act === "add") setCartQty(sku, 1, catalog)
       if (act.dataset.act === "inc") setCartQty(sku, current + 1, catalog)
@@ -567,8 +655,8 @@ function cartIcon() {
 }
 
 function cartSummary() {
-  const catalog = load(KEYS.catalog, SAMPLE)
-  const cart = load(KEYS.cart, [])
+  const catalog = load(keys().catalog, currentWs().id === "deodap" ? SAMPLE : [])
+  const cart = load(keys().cart, [])
   let units = 0
   let total = 0
   cart.forEach((line) => {
@@ -582,15 +670,17 @@ function cartSummary() {
 
 function navHtml(page) {
   const { units, total } = cartSummary()
-  const favCount = load(KEYS.favs, []).length
+  const favCount = load(keys().favs, []).length
   const cartLabel = `<span class="nav-cart">${cartIcon()}Cart${units ? `<span class="badge">${units}</span>` : ""}${total ? `<span class="nav-total">${fmt(total)}</span>` : ""}</span>`
   const links = [
-    ["home", "#/", "Home"],
-    ["cart", "#/cart", cartLabel],
-    ["orders", "#/orders", "Orders"],
-    ["favourites", "#/favourites", `Favourites${favCount ? `<span class="badge">${favCount}</span>` : ""}`],
-    ["account", "#/account", "Account"],
+    ["home", path("/"), "Home"],
+    ["cart", path("cart"), cartLabel],
+    ["orders", path("orders"), "Orders"],
   ]
+  if (currentWs().features.favourites) {
+    links.push(["favourites", path("favourites"), `Favourites${favCount ? `<span class="badge">${favCount}</span>` : ""}`])
+  }
+  links.push(["account", path("account"), "Account"])
   return links
     .map(([name, href, label]) => `<a class="${page === name || (page === "item" && name === "home") || (page === "order" && name === "orders") ? "on" : ""}" href="${href}">${label}</a>`)
     .join("")
@@ -610,7 +700,7 @@ function homePage(filterFavs = false) {
       <input class="search" id="q" type="search" placeholder="Search name, SKU, vendor…" value="${esc(searchQ)}" />
       ${(() => {
         const { units, total } = cartSummary()
-        return `<a class="cart-chip" href="#/cart">${cartIcon()}<span>${fmt(total)}</span>${units ? `<span class="badge">${units}</span>` : ""}</a>`
+        return `<a class="cart-chip" href="${path("cart")}">${cartIcon()}<span>${fmt(total)}</span>${units ? `<span class="badge">${units}</span>` : ""}</a>`
       })()}
     </div>
     ${
@@ -628,7 +718,7 @@ function itemPage(sku) {
   const qty = Math.max(1, cartQty(data.cart, sku))
   const line = item.price * qty
   return `
-    <p class="sub"><a href="#/">← Back to items</a></p>
+    <p class="sub"><a href="${path("/")}">← Back to items</a></p>
     <h1>Cart review</h1>
     <p class="sub">Same layout as the test.html view.</p>
     <section class="review-stats">
@@ -672,7 +762,7 @@ function cartPage() {
 }
 
 function ordersPage() {
-  const orders = load(KEYS.orders, [])
+  const orders = load(keys().orders, [])
   return `
     <h1>Orders</h1>
     <p class="sub">Orders created from the cart.</p>
@@ -680,7 +770,7 @@ function ordersPage() {
       orders.length
         ? orders
             .map(
-              (order) => `<a class="order-row" href="#/orders/${encodeURIComponent(order.id)}">
+              (order) => `<a class="order-row" href="${path("orders/" + encodeURIComponent(order.id))}">
                 <div>
                   <strong>${esc(order.id)}</strong>
                   <div class="meta">${new Date(order.createdAt).toLocaleString("en-IN")} · ${order.items.length} products · ${fmt(order.total)}</div>
@@ -694,10 +784,10 @@ function ordersPage() {
 }
 
 function orderPage(id) {
-  const order = load(KEYS.orders, []).find((row) => row.id === id)
+  const order = load(keys().orders, []).find((row) => row.id === id)
   if (!order) return `<p class="empty">Order not found.</p>`
   return `
-    <p class="sub"><a href="#/orders">← All orders</a></p>
+    <p class="sub"><a href="${path("orders")}">← All orders</a></p>
     <h1>${esc(order.id)}</h1>
     <p class="sub">${new Date(order.createdAt).toLocaleString("en-IN")}</p>
     <section class="review-stats">
@@ -712,11 +802,26 @@ function orderPage(id) {
 const FIRESTORE_RULES = `rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /deodap/{document=**} {
-      allow read, write: if true;
+    match /{brand}/{document=**} {
+      allow read, write: if brand in ['deodap', 'paarth'];
     }
   }
 }`
+
+function pickerPage() {
+  return `
+    <h1>Choose a workspace</h1>
+    <p class="sub">Each option has its own catalog, cart, orders, JSON format, and cloud folder.</p>
+    <section class="picker-grid">
+      ${Object.values(WORKSPACES).map((space) => `
+        <button type="button" class="picker-card" data-workspace="${esc(space.id)}">
+          <strong>${esc(space.name)}</strong>
+          <span>${esc(space.blurb)}</span>
+        </button>
+      `).join("")}
+    </section>
+  `
+}
 
 const accountUi = {
   importPaste: "",
@@ -728,12 +833,12 @@ const accountUi = {
 }
 
 function accountPage() {
-  const cfg = firebaseConfigToUse() || load(KEYS.firebase, null)
+  const cfg = firebaseConfigToUse() || load(keys().firebase, null)
   const savedCfg = cfg ? JSON.stringify(cfg, null, 2) : accountUi.firebasePaste
   return `
     <h1>Account</h1>
     <p class="${cloud.status === "live" ? "cloud-pill live" : cloud.status === "error" ? "cloud-pill error" : "cloud-pill"}">${esc(cloudLabel())}</p>
-    <p class="sub">Paste a Shopify cart JSON like <strong>test.json</strong>: { "items": [ { "sku", "title", "price", "image", ... } ] }. Unique id is each item's sku.</p>
+    <p class="sub">${esc(currentWs().jsonHint)}</p>
     <div class="account-box">
       <section class="drop">
         <h2>Firebase (cloud save)</h2>
@@ -746,7 +851,7 @@ function accountPage() {
           <li>Paste the config here and click <strong>Connect Firebase</strong>.</li>
         </ol>
         <pre class="rules">${esc(FIRESTORE_RULES)}</pre>
-        <p class="meta">Anyone with this web app and these open rules can read/write <code>deodap/state</code>. Lock this down with sign-in later.</p>
+        <p class="meta">Anyone with this web app and these open rules can read/write <code>${esc(currentWs().prefix)}/state</code>. Lock this down with sign-in later.</p>
         <textarea id="firebase-paste" class="json-paste" spellcheck="false" placeholder='{ apiKey: "...", projectId: "...", appId: "..." }'>${esc(savedCfg)}</textarea>
         <button type="button" class="btn primary" id="firebase-connect">Connect Firebase</button>
         ${cfg ? `<button type="button" class="btn ghost" id="firebase-disconnect">Disconnect</button>` : ""}
@@ -754,7 +859,7 @@ function accountPage() {
       </section>
       <section class="drop">
         <h2>Import JSON</h2>
-        <p class="meta">Paste JSON and import. This replaces the homepage list.</p>
+        <p class="meta">Paste JSON and import. This replaces the ${esc(currentWs().name)} homepage list.${currentWs().features.importFillsCart ? " Qty in the JSON is added to the cart." : ""}</p>
         <textarea id="import-paste" class="json-paste" spellcheck="false" placeholder='Paste test.json here — Shopify cart with "items": [ { "sku": "...", "title": "...", "price": 1853, "image": "https://..." } ]'>${esc(accountUi.importPaste)}</textarea>
         <button type="button" class="btn primary" id="import-json">Import JSON</button>
         <p class="${esc(accountUi.importMsg.className)}" id="import-msg">${esc(accountUi.importMsg.text)}</p>
@@ -783,11 +888,15 @@ function applyPastedJson(mode) {
   }
   try {
     const incoming = parseCatalogJson(text)
-    const current = load(KEYS.catalog, [])
+    const current = load(keys().catalog, [])
     if (mode === "import") {
       writeCatalog(incoming)
-      writeCart(load(KEYS.cart, []).filter((line) => incoming.some((item) => item.sku === line.sku)))
-      writeFavs(load(KEYS.favs, []).filter((sku) => incoming.some((item) => item.sku === sku)))
+      if (currentWs().features.importFillsCart) {
+        writeCart(incoming.filter((item) => item.qtyHint > 0).map((item) => ({ sku: item.sku, qty: item.qtyHint })))
+      } else {
+        writeCart(load(keys().cart, []).filter((line) => incoming.some((item) => item.sku === line.sku)))
+      }
+      writeFavs(load(keys().favs, []).filter((sku) => incoming.some((item) => item.sku === sku)))
       accountUi[msgKey] = {
         className: "msg ok",
         text: `Replaced homepage with ${incoming.length} unique SKU${incoming.length === 1 ? "" : "s"}.`,
@@ -812,8 +921,24 @@ function applyPastedJson(mode) {
 
 function render() {
   const page = route()
-  document.getElementById("nav").innerHTML = navHtml(page.name)
+  const brand = document.getElementById("brand")
   const root = document.getElementById("page")
+  document.title = page.name === "pick" ? "Orders" : currentWs().title
+  if (brand) {
+    brand.textContent = page.name === "pick" ? "Orders" : currentWs().title
+    brand.href = "#/"
+  }
+  if (page.name === "pick") {
+    document.getElementById("nav").innerHTML = ""
+    root.innerHTML = pickerPage()
+    root.querySelectorAll("[data-workspace]").forEach((button) => {
+      button.addEventListener("click", () => {
+        location.hash = `#/${button.dataset.workspace}/`
+      })
+    })
+    return
+  }
+  document.getElementById("nav").innerHTML = navHtml(page.name)
   if (page.name === "item") root.innerHTML = itemPage(page.sku)
   else if (page.name === "cart") root.innerHTML = cartPage()
   else if (page.name === "orders") root.innerHTML = ordersPage()
@@ -845,8 +970,8 @@ function render() {
   const addKeep = root.querySelector("[data-add]")
   if (addKeep) {
     addKeep.addEventListener("click", () => {
-      setCartQty(addKeep.dataset.add, Math.max(1, cartQty(load(KEYS.cart, []), addKeep.dataset.add)), data.catalog)
-      location.hash = "#/cart"
+      setCartQty(addKeep.dataset.add, Math.max(1, cartQty(load(keys().cart, []), addKeep.dataset.add)), data.catalog)
+      location.hash = path("cart")
     })
   }
 
@@ -855,7 +980,7 @@ function render() {
     create.addEventListener("click", () => {
       const order = createOrder()
       if (!order) return
-      location.hash = "#/orders/" + encodeURIComponent(order.id)
+      location.hash = path("orders/" + encodeURIComponent(order.id))
     })
   }
 
@@ -880,7 +1005,7 @@ function render() {
         accountUi.firebaseMsg = {
           className: cloud.status === "live" ? "msg ok" : "msg err",
           text: cloud.status === "live"
-            ? `Connected. Catalog, cart, favourites, and orders are stored in the cloud (project ${cloud.projectId}, document deodap/state).`
+            ? `Connected. ${currentWs().name} data is stored in the cloud (project ${cloud.projectId}, document ${currentWs().prefix}/state).`
             : cloud.error || "Could not connect.",
         }
       } catch (error) {
@@ -903,6 +1028,16 @@ function render() {
   }
 }
 
-window.addEventListener("hashchange", render)
-render()
-connectFirebase().finally(() => render())
+let cloudWorkspace = ""
+
+function boot() {
+  const page = route()
+  render()
+  if (page.name === "pick") return
+  if (cloudWorkspace === activeWorkspace && (cloud.db || cloud.status === "error" || cloud.status === "live")) return
+  cloudWorkspace = activeWorkspace
+  connectFirebase().finally(() => render())
+}
+
+window.addEventListener("hashchange", boot)
+boot()

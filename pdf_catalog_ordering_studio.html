@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CatalogFlow — Interactive PDF Product Catalog & Ordering</title>
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- PDF.js Library for client-side PDF rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom subtle scrollbars */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased min-h-screen flex flex-col">
+
+    <!-- Top Application Header -->
+    <header class="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 min-w-0">
+            <div class="w-9 h-9 rounded-xl bg-brand-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                <i data-lucide="layout-grid" class="w-5 h-5"></i>
+            </div>
+            <div class="truncate">
+                <h1 class="text-base sm:text-lg font-bold tracking-tight text-slate-900 truncate">CatalogFlow</h1>
+                <p id="header-subtitle" class="text-xs text-slate-500 truncate">PDF Page Catalog & Order Studio</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2 sm:gap-3">
+            <!-- Currency Selector -->
+            <div class="relative flex items-center">
+                <select id="currency-select" onchange="changeCurrency(this.value)" aria-label="Currency"
+                    class="appearance-none bg-slate-100 hover:bg-slate-200/80 text-slate-800 text-xs sm:text-sm font-semibold pl-3 pr-7 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 cursor-pointer transition">
+                    <option value="₹">₹ INR</option>
+                    <option value="$" selected>$ USD</option>
+                    <option value="€">€ EUR</option>
+                    <option value="£">£ GBP</option>
+                </select>
+                <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-500 pointer-events-none absolute right-2.5"></i>
+            </div>
+
+            <!-- Live Header Budget Summary Pill -->
+            <div onclick="toggleDrawer(true)" class="hidden sm:flex items-center gap-2 px-3.5 py-1.5 bg-emerald-50 border border-emerald-200/80 text-emerald-900 rounded-xl cursor-pointer hover:bg-emerald-100/70 transition" title="View Order Budget">
+                <i data-lucide="wallet" class="w-4 h-4 text-emerald-600"></i>
+                <div class="text-xs">
+                    <span class="text-emerald-700 font-medium">Budget:</span>
+                    <span id="header-budget-total" class="font-bold text-emerald-950 ml-0.5">$0.00</span>
+                </div>
+            </div>
+
+            <!-- Upload New PDF Button (Hidden initially until file loaded) -->
+            <button id="header-upload-btn" onclick="triggerFileUpload()" class="hidden items-center gap-2 px-3 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition shadow-sm">
+                <i data-lucide="upload" class="w-4 h-4 text-slate-500"></i>
+                <span class="hidden md:inline">Change PDF</span>
+            </button>
+
+            <!-- Mobile Cart Drawer Toggle -->
+            <button id="mobile-cart-btn" onclick="toggleDrawer(true)" class="lg:hidden relative flex items-center gap-2 px-3 py-2 text-xs sm:text-sm font-semibold text-white bg-brand-600 rounded-xl hover:bg-brand-700 transition shadow-sm">
+                <i data-lucide="shopping-bag" class="w-4 h-4"></i>
+                <span id="mobile-budget-label">$0</span>
+                <span id="mobile-badge" class="ml-0.5 px-1.5 py-0.5 text-[11px] bg-white text-brand-700 rounded-full font-bold">0</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Hidden File Input -->
+    <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden" onchange="handleFileSelect(event)" />
+
+    <!-- Main Workspace -->
+    <div class="flex-1 flex flex-col lg:flex-row relative">
+
+        <!-- Left / Center Catalog Grid Area -->
+        <main class="flex-1 p-4 sm:p-6 lg:p-8 max-w-full overflow-x-hidden">
+
+            <!-- Initial Empty State / Drag & Drop Upload Zone -->
+            <div id="upload-hero" class="max-w-2xl mx-auto my-8 sm:my-16">
+                <div id="drop-zone"
+                    ondragover="handleDragOver(event)"
+                    ondragleave="handleDragLeave(event)"
+                    ondrop="handleDrop(event)"
+                    onclick="triggerFileUpload()"
+                    class="group cursor-pointer bg-white border-2 border-dashed border-slate-300 hover:border-brand-500 rounded-3xl p-8 sm:p-14 text-center transition-all duration-200 shadow-sm hover:shadow-md">
+
+                    <div class="w-16 h-16 mx-auto mb-5 rounded-2xl bg-brand-50 text-brand-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+                        <i data-lucide="file-up" class="w-8 h-8"></i>
+                    </div>
+
+                    <h2 class="text-xl sm:text-2xl font-bold text-slate-900 mb-2">Upload Your Product Catalog PDF</h2>
+                    <p class="text-sm sm:text-base text-slate-500 max-w-md mx-auto mb-6">
+                        Every page in your PDF becomes a selectable product card with custom unit pricing, live budget calculation, and instant order export.
+                    </p>
+
+                    <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+                        <button type="button" class="w-full sm:w-auto px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center justify-center gap-2">
+                            <i data-lucide="folder-open" class="w-4 h-4"></i>
+                            <span>Choose PDF File</span>
+                        </button>
+                        <button type="button" onclick="event.stopPropagation(); loadDemoCatalog();" class="w-full sm:w-auto px-5 py-3 bg-slate-100 hover:bg-slate-200/80 text-slate-700 font-semibold text-sm rounded-xl transition flex items-center justify-center gap-2">
+                            <i data-lucide="sparkles" class="w-4 h-4 text-brand-600"></i>
+                            <span>Try 8-Page Sample Catalog</span>
+                        </button>
+                    </div>
+
+                    <p class="text-xs text-slate-400 mt-6">100% private — your PDF is processed locally inside your browser.</p>
+                </div>
+            </div>
+
+            <!-- Catalog Controls & Grid Section (Hidden until PDF loads) -->
+            <div id="catalog-workspace" class="hidden space-y-6">
+
+                <!-- Toolbar: Search, Filter Tabs, Bulk Actions & Grid Density -->
+                <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+
+                    <!-- Search & Filter Tabs -->
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
+                        <div class="relative flex-1 max-w-md">
+                            <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+                            <input type="text" id="search-input" oninput="handleSearch(this.value)" placeholder="Search page #, SKU, price, or notes..."
+                                class="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition" />
+                        </div>
+
+                        <!-- Filter Tabs -->
+                        <div class="inline-flex p-1 bg-slate-100 rounded-xl self-start sm:self-auto">
+                            <button onclick="setFilterMode('all')" id="filter-all" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-900 shadow-sm transition">
+                                All (<span id="count-all">0</span>)
+                            </button>
+                            <button onclick="setFilterMode('selected')" id="filter-selected" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-900 transition">
+                                Selected (<span id="count-selected">0</span>)
+                            </button>
+                            <button onclick="setFilterMode('priced')" id="filter-priced" class="px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-900 transition">
+                                Priced (<span id="count-priced">0</span>)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Bulk Select & View Density -->
+                    <div class="flex flex-wrap items-center justify-between sm:justify-end gap-2">
+                        <button onclick="selectAllVisible()" class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition">
+                            Select All
+                        </button>
+                        <button onclick="clearSelection()" class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition">
+                            Clear Selection
+                        </button>
+
+                        <div class="h-5 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+
+                        <!-- Grid Density Toggle -->
+                        <div class="inline-flex p-1 bg-slate-100 rounded-xl" title="Grid Card Size">
+                            <button onclick="setGridDensity('comfortable')" id="density-comfortable" class="p-1.5 rounded-lg bg-white text-slate-900 shadow-sm transition" title="Standard Grid">
+                                <i data-lucide="grid-2x2" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="setGridDensity('compact')" id="density-compact" class="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 transition" title="Compact Grid">
+                                <i data-lucide="grid-3x3" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rendering Progress Banner (Shown while pages render in background) -->
+                <div id="render-progress-bar" class="hidden bg-brand-50 border border-brand-100 text-brand-700 px-4 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium">
+                    <div class="flex items-center gap-2.5">
+                        <div class="w-4 h-4 border-2 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
+                        <span id="render-progress-text">Rendering catalog pages...</span>
+                    </div>
+                    <span id="render-progress-pct" class="font-bold">0%</span>
+                </div>
+
+                <!-- Product Pages Grid -->
+                <div id="catalog-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+                    <!-- Dynamic Product Page Cards injected here -->
+                </div>
+
+                <!-- Empty Search / Filter State -->
+                <div id="empty-filter-state" class="hidden text-center py-16 bg-white rounded-3xl border border-slate-200">
+                    <i data-lucide="search-x" class="w-10 h-10 text-slate-300 mx-auto mb-3"></i>
+                    <h3 class="text-base font-semibold text-slate-800">No matching catalog pages</h3>
+                    <p class="text-sm text-slate-500 mt-1">Try clearing your search query or switching back to "All" items.</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Backdrop for Mobile Cart Drawer -->
+        <div id="drawer-backdrop" onclick="toggleDrawer(false)" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 hidden lg:hidden"></div>
+
+        <!-- Right Order Summary & Cart Sidebar -->
+        <aside id="order-drawer" class="fixed lg:sticky top-0 lg:top-16 right-0 z-50 lg:z-20 h-screen lg:h-[calc(100vh-4rem)] w-full max-w-sm bg-white border-l border-slate-200 flex flex-col transform translate-x-full lg:translate-x-0 transition-transform duration-200 ease-out shadow-xl lg:shadow-none">
+
+            <!-- Drawer Header -->
+            <div class="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                    <h2 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <i data-lucide="shopping-bag" class="w-4 h-4 text-brand-600"></i>
+                        <span>Order Selection</span>
+                    </h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                        <span id="summary-item-count" class="font-semibold text-slate-700">0</span> items ·
+                        <span id="summary-total-units" class="font-semibold text-slate-700">0</span> total units
+                    </p>
+                </div>
+                <button onclick="toggleDrawer(false)" class="lg:hidden p-2 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-slate-100">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Customer / PO Reference Input -->
+            <div class="px-4 pt-3 pb-2 bg-slate-50/70 border-b border-slate-100">
+                <label class="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Order / Client Reference</label>
+                <input type="text" id="order-reference" placeholder="e.g., PO-2026-884 or Client Name"
+                    class="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-brand-500" />
+            </div>
+
+            <!-- Selected Items List -->
+            <div id="cart-items-list" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <!-- Empty Cart State -->
+                <div id="empty-cart-state" class="h-full flex flex-col items-center justify-center text-center py-10 px-4">
+                    <div class="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                        <i data-lucide="mouse-pointer-click" class="w-6 h-6"></i>
+                    </div>
+                    <p class="text-sm font-semibold text-slate-700">Your order list is empty</p>
+                    <p class="text-xs text-slate-400 mt-1 max-w-[220px]">
+                        Click any page card in the catalog grid to add it to your order and calculate your budget.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Cart Footer / Export Actions -->
+            <div class="p-4 border-t border-slate-200 bg-slate-50 space-y-3">
+                <!-- Grand Total Budget Box -->
+                <div class="bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-2xs">
+                    <div class="flex items-center justify-between text-xs text-slate-500 mb-1">
+                        <span>Selected Items (<span id="footer-item-count">0</span>)</span>
+                        <span>Total Units: <strong id="footer-unit-count" class="text-slate-700">0</strong></span>
+                    </div>
+                    <div class="flex items-baseline justify-between pt-1.5 border-t border-slate-100">
+                        <span class="text-xs font-bold uppercase tracking-wider text-slate-600">Total Budget</span>
+                        <span id="drawer-grand-total" class="text-xl font-extrabold text-emerald-600">$0.00</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="exportOrderCSV()" id="btn-export-csv" disabled class="px-3 py-2.5 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 shadow-xs">
+                        <i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i>
+                        <span>Export CSV</span>
+                    </button>
+                    <button onclick="exportOrderJSON()" id="btn-export-json" disabled class="px-3 py-2.5 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 shadow-xs">
+                        <i data-lucide="code" class="w-3.5 h-3.5"></i>
+                        <span>Export JSON</span>
+                    </button>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="copyOrderClipboard()" id="btn-copy-order" disabled class="px-3 py-2 bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 border border-slate-200 text-xs font-medium rounded-xl transition flex items-center justify-center gap-1.5">
+                        <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                        <span>Copy Summary</span>
+                    </button>
+                    <button onclick="openPrintSummary()" id="btn-print-order" disabled class="px-3 py-2 bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 border border-slate-200 text-xs font-medium rounded-xl transition flex items-center justify-center gap-1.5">
+                        <i data-lucide="printer" class="w-3.5 h-3.5"></i>
+                        <span>Print Sheet</span>
+                    </button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Full-Page High-Resolution Lightbox Modal -->
+    <div id="preview-modal" class="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs hidden items-center justify-center p-3 sm:p-6">
+        <div class="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col md:flex-row overflow-hidden shadow-2xl border border-slate-200">
+
+            <!-- Left: High-Res Page Canvas Viewer -->
+            <div class="flex-1 bg-slate-100 relative flex items-center justify-center overflow-auto p-4 min-h-[300px] sm:min-h-[450px]">
+                <div id="modal-loader" class="hidden flex-col items-center gap-2 text-slate-500">
+                    <div class="w-7 h-7 border-2 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
+                    <span class="text-xs font-medium">Rendering HD Page...</span>
+                </div>
+                <img id="modal-page-img" src="" alt="Full Page Preview" class="max-h-[75vh] w-auto object-contain rounded-lg shadow-md bg-white transition-transform duration-150" />
+
+                <!-- Zoom & Page Nav Controls Floating Pill -->
+                <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-900/90 text-white px-3 py-1.5 rounded-full flex items-center gap-3 text-xs shadow-lg">
+                    <button onclick="navigateModalPage(-1)" class="hover:text-brand-300 p-1" title="Previous Page">
+                        <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                    </button>
+                    <span id="modal-nav-indicator" class="font-semibold">1 / 1</span>
+                    <button onclick="navigateModalPage(1)" class="hover:text-brand-300 p-1" title="Next Page">
+                        <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                    </button>
+                    <div class="h-3.5 w-px bg-slate-700"></div>
+                    <button onclick="adjustModalZoom(-0.25)" class="hover:text-brand-300 p-1" title="Zoom Out">
+                        <i data-lucide="zoom-out" class="w-4 h-4"></i>
+                    </button>
+                    <span id="zoom-level-label">100%</span>
+                    <button onclick="adjustModalZoom(0.25)" class="hover:text-brand-300 p-1" title="Zoom In">
+                        <i data-lucide="zoom-in" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right: Item Details & Ordering Controls -->
+            <div class="w-full md:w-80 lg:w-96 p-5 sm:p-6 bg-white border-t md:border-t-0 md:border-l border-slate-200 flex flex-col justify-between overflow-y-auto">
+                <div class="space-y-4">
+                    <div class="flex items-start justify-between gap-2">
+                        <div>
+                            <span id="modal-page-badge" class="inline-block px-2.5 py-0.5 text-xs font-bold bg-brand-50 text-brand-700 rounded-lg mb-1">Page 1</span>
+                            <h3 id="modal-item-title" class="text-lg font-bold text-slate-900">Catalog Item #1</h3>
+                        </div>
+                        <button onclick="closePreviewModal()" class="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition">
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+
+                    <div class="space-y-3 pt-2">
+                        <!-- Custom SKU / Item Code -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Product SKU / Item Code</label>
+                            <input type="text" id="modal-sku-input" placeholder="e.g., CAT-001"
+                                class="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500" />
+                        </div>
+
+                        <!-- Unit Price & Quantity Row -->
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Unit Price (<span id="modal-currency-symbol">$</span>)</label>
+                                <input type="number" id="modal-price-input" min="0" step="0.01" placeholder="0.00" oninput="updateModalSubtotalPreview()"
+                                    class="w-full h-10 px-3 text-sm font-bold bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500" />
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Order Quantity</label>
+                                <div class="flex items-center gap-1.5">
+                                    <button type="button" onclick="stepModalQty(-1)" class="w-9 h-10 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 flex items-center justify-center text-slate-700 font-bold transition shrink-0">
+                                        <i data-lucide="minus" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                    <input type="number" id="modal-qty-input" min="1" value="1" oninput="updateModalSubtotalPreview()"
+                                        class="w-full h-10 text-center font-bold text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-brand-500" />
+                                    <button type="button" onclick="stepModalQty(1)" class="w-9 h-10 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 flex items-center justify-center text-slate-700 font-bold transition shrink-0">
+                                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Live Modal Line Subtotal Banner -->
+                        <div class="flex items-center justify-between px-3.5 py-2.5 bg-emerald-50/80 border border-emerald-200/70 rounded-xl">
+                            <span class="text-xs font-semibold text-emerald-800">Estimated Line Total</span>
+                            <span id="modal-line-subtotal" class="text-sm font-extrabold text-emerald-700">$0.00</span>
+                        </div>
+
+                        <!-- Item Notes / Variants -->
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-700 mb-1.5">Variant / Size / Notes</label>
+                            <textarea id="modal-notes-input" rows="2" placeholder="Color, size, packaging instructions..."
+                                class="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 resize-none"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Modal Action Footer -->
+                <div class="pt-5 mt-5 border-t border-slate-100 flex flex-col gap-2">
+                    <button id="modal-toggle-select-btn" onclick="saveAndToggleFromModal()" class="w-full py-3 px-4 bg-brand-600 hover:bg-brand-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center justify-center gap-2">
+                        <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+                        <span>Save & Keep in Order</span>
+                    </button>
+                    <button onclick="closePreviewModal()" class="w-full py-2 px-4 text-slate-500 hover:text-slate-800 text-xs font-semibold rounded-xl transition">
+                        Close Preview
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Non-Blocking Toast Notification Container -->
+    <div id="toast-container" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <script>
+        // Configure PDF.js Worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // Application State
+        const state = {
+            pdfDoc: null,
+            fileName: '',
+            totalPages: 0,
+            isDemoMode: false,
+            currency: '$',
+            items: [], // Array of { pageNum, sku, price, qty, selected, notes, extractedText, thumbDataUrl, demoData }
+            filterMode: 'all', // 'all' | 'selected' | 'priced'
+            searchQuery: '',
+            gridDensity: 'comfortable', // 'comfortable' | 'compact'
+            activeModalPage: null,
+            modalZoom: 1.0
+        };
+
+        // Initialize Lucide icons on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+        });
+
+        // Format currency helper
+        function formatMoney(amount) {
+            const num = Number(amount) || 0;
+            return `${state.currency}${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
+        function changeCurrency(symbol) {
+            state.currency = symbol;
+            // Re-render demo thumbnails if in demo mode so price labels match currency
+            if (state.isDemoMode) {
+                state.items.forEach(item => {
+                    if (item.demoData) {
+                        item.thumbDataUrl = generateDemoPageDataUrl(item.pageNum, item.demoData, 1);
+                    }
+                });
+            }
+            renderGrid();
+            updateOrderSummary();
+            if (state.activeModalPage) {
+                document.getElementById('modal-currency-symbol').textContent = state.currency;
+                updateModalSubtotalPreview();
+            }
+        }
+
+        // File Trigger & Drag-Drop Handlers
+        function triggerFileUpload() {
+            document.getElementById('pdf-file-input').click();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('drop-zone').classList.add('border-brand-500', 'bg-brand-50/40');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('drop-zone').classList.remove('border-brand-500', 'bg-brand-50/40');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.getElementById('drop-zone').classList.remove('border-brand-500', 'bg-brand-50/40');
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                processPDFFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                processPDFFile(file);
+            }
+            e.target.value = '';
+        }
+
+        // Load and Parse Uploaded PDF
+        async function processPDFFile(file) {
+            if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+                showToast('Please select a valid PDF document.', 'error');
+                return;
+            }
+
+            try {
+                showToast(`Loading "${file.name}"...`, 'info');
+                const arrayBuffer = await file.arrayBuffer();
+                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                const pdf = await loadingTask.promise;
+
+                state.pdfDoc = pdf;
+                state.isDemoMode = false;
+                state.fileName = file.name;
+                state.totalPages = pdf.numPages;
+                state.items = [];
+
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    state.items.push({
+                        pageNum: i,
+                        sku: `ITEM-${String(i).padStart(3, '0')}`,
+                        price: 0,
+                        qty: 1,
+                        selected: false,
+                        notes: '',
+                        extractedText: '',
+                        thumbDataUrl: null
+                    });
+                }
+
+                activateWorkspaceUI(file.name, `${pdf.numPages} Product Pages`);
+                renderGrid();
+                await renderAllThumbnailsProgressive();
+            } catch (err) {
+                console.error('PDF Load Error:', err);
+                showToast('Could not read PDF file. Ensure it is not password protected.', 'error');
+            }
+        }
+
+        // Built-in Sample Catalog Generator (Allows immediate testing without needing a local PDF)
+        async function loadDemoCatalog() {
+            const sampleProducts = [
+                { sku: 'ARC-101', name: 'Nordic Lounge Chair', price: 340, color: '#4f46e5', desc: 'Solid oak frame with woven bouclé upholstery.' },
+                { sku: 'ARC-102', name: 'Minimalist Desk Lamp', price: 125, color: '#0ea5e9', desc: 'Matte anodized aluminum with warm dimming.' },
+                { sku: 'ARC-103', name: 'Ceramic Pour-Over Set', price: 68, color: '#10b981', desc: 'Hand-glazed stoneware carafe and dripper.' },
+                { sku: 'ARC-104', name: 'Modular Shelving Unit', price: 520, color: '#f59e0b', desc: 'Configurable steel uprights with walnut shelves.' },
+                { sku: 'ARC-105', name: 'Acoustic Wall Panel', price: 89, color: '#ec4899', desc: 'Recycled felt sound-absorbing geometric tile.' },
+                { sku: 'ARC-106', name: 'Merino Throw Blanket', price: 145, color: '#8b5cf6', desc: '100% extra-fine Australian merino wool.' },
+                { sku: 'ARC-107', name: 'Espresso Tamper Pro', price: 54, color: '#64748b', desc: 'Calibrated 58.5mm stainless steel base.' },
+                { sku: 'ARC-108', name: 'Terracotta Planter Trio', price: 95, color: '#ea580c', desc: 'Breathable clay pots with drainage saucers.' }
+            ];
+
+            state.pdfDoc = null;
+            state.isDemoMode = true;
+            state.fileName = 'Autumn_Home_Collection_2026.pdf';
+            state.totalPages = sampleProducts.length;
+            state.items = sampleProducts.map((prod, idx) => {
+                const dataUrl = generateDemoPageDataUrl(idx + 1, prod, 1);
+                return {
+                    pageNum: idx + 1,
+                    sku: prod.sku,
+                    price: prod.price,
+                    qty: idx === 2 ? 2 : 1,
+                    selected: idx === 0 || idx === 2, // Pre-select 2 items as example
+                    notes: idx === 0 ? 'Warm Grey Fabric' : '',
+                    extractedText: `${prod.name} - ${prod.sku} - ${state.currency}${prod.price} - ${prod.desc}`,
+                    thumbDataUrl: dataUrl,
+                    demoData: prod
+                };
+            });
+
+            activateWorkspaceUI(state.fileName, `${state.totalPages} Sample Product Pages`);
+            renderGrid();
+            updateOrderSummary();
+            showToast('Loaded 8-page sample catalog with default pricing!', 'success');
+        }
+
+        function generateDemoPageDataUrl(pageNum, prod, scale = 1) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 420 * scale;
+            canvas.height = 560 * scale;
+            const ctx = canvas.getContext('2d');
+            ctx.scale(scale, scale);
+
+            // Page background
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, 420, 560);
+
+            // Top header bar
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(0, 0, 420, 48);
+            ctx.fillStyle = '#64748b';
+            ctx.font = '600 12px Inter, sans-serif';
+            ctx.fillText(`CATALOG 2026  •  PAGE ${pageNum}`, 24, 29);
+
+            // Product Visual Showcase Box
+            ctx.fillStyle = prod.color + '18';
+            ctx.beginPath();
+            ctx.roundRect(28, 70, 364, 270, 16);
+            ctx.fill();
+
+            // Abstract Geometric Product Illustration
+            ctx.fillStyle = prod.color;
+            ctx.beginPath();
+            ctx.arc(210, 205, 68, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '700 22px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(prod.sku, 210, 213);
+            ctx.textAlign = 'left';
+
+            // Product Typography
+            ctx.fillStyle = '#4f46e5';
+            ctx.font = '700 13px Inter, sans-serif';
+            ctx.fillText(prod.sku, 28, 380);
+
+            ctx.fillStyle = '#0f172a';
+            ctx.font = '800 24px Inter, sans-serif';
+            ctx.fillText(prod.name, 28, 412);
+
+            ctx.fillStyle = '#475569';
+            ctx.font = '400 14px Inter, sans-serif';
+            ctx.fillText(prod.desc, 28, 444);
+
+            // Price Tag Pill
+            ctx.fillStyle = '#f1f5f9';
+            ctx.beginPath();
+            ctx.roundRect(28, 485, 130, 44, 10);
+            ctx.fill();
+
+            ctx.fillStyle = '#0f172a';
+            ctx.font = '700 22px Inter, sans-serif';
+            ctx.fillText(`${state.currency}${prod.price.toFixed(2)}`, 40, 514);
+
+            return canvas.toDataURL('image/png');
+        }
+
+        function activateWorkspaceUI(fileName, subtitle) {
+            document.getElementById('upload-hero').classList.add('hidden');
+            document.getElementById('catalog-workspace').classList.remove('hidden');
+            const headerBtn = document.getElementById('header-upload-btn');
+            headerBtn.classList.remove('hidden');
+            headerBtn.classList.add('flex');
+            document.getElementById('header-subtitle').textContent = `${fileName} (${subtitle})`;
+        }
+
+        // Progressive Thumbnail Rendering for Real PDFs
+        async function renderAllThumbnailsProgressive() {
+            const progressBar = document.getElementById('render-progress-bar');
+            const progressText = document.getElementById('render-progress-text');
+            const progressPct = document.getElementById('render-progress-pct');
+
+            progressBar.classList.remove('hidden');
+
+            for (let i = 0; i < state.items.length; i++) {
+                const item = state.items[i];
+                if (!state.pdfDoc) break; // User switched files
+
+                try {
+                    const page = await state.pdfDoc.getPage(item.pageNum);
+
+                    // Extract searchable text from page
+                    const textContent = await page.getTextContent();
+                    item.extractedText = textContent.items.map(t => t.str).join(' ').trim();
+
+                    // Render thumbnail canvas
+                    const viewport = page.getViewport({ scale: 0.65 });
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                    item.thumbDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+                    // Update specific card image in DOM immediately without full re-render
+                    const imgEl = document.getElementById(`thumb-img-${item.pageNum}`);
+                    const skelEl = document.getElementById(`thumb-skel-${item.pageNum}`);
+                    if (imgEl && skelEl) {
+                        imgEl.src = item.thumbDataUrl;
+                        imgEl.classList.remove('hidden');
+                        skelEl.classList.add('hidden');
+                    }
+                } catch (err) {
+                    console.warn(`Error rendering page ${item.pageNum}:`, err);
+                }
+
+                const pct = Math.round(((i + 1) / state.items.length) * 100);
+                progressText.textContent = `Rendered page ${i + 1} of ${state.items.length}...`;
+                progressPct.textContent = `${pct}%`;
+            }
+
+            setTimeout(() => {
+                progressBar.classList.add('hidden');
+            }, 600);
+        }
+
+        // Render Product Cards Grid
+        function renderGrid() {
+            const grid = document.getElementById('catalog-grid');
+            const emptyFilter = document.getElementById('empty-filter-state');
+            const filteredItems = getFilteredItems();
+
+            // Update Filter Counts
+            document.getElementById('count-all').textContent = state.items.length;
+            document.getElementById('count-selected').textContent = state.items.filter(i => i.selected).length;
+            document.getElementById('count-priced').textContent = state.items.filter(i => (Number(i.price) || 0) > 0).length;
+
+            if (filteredItems.length === 0) {
+                grid.innerHTML = '';
+                emptyFilter.classList.remove('hidden');
+                return;
+            }
+
+            emptyFilter.classList.add('hidden');
+
+            grid.innerHTML = filteredItems.map(item => {
+                const isSelected = item.selected;
+                const unitPrice = Number(item.price) || 0;
+                const lineSubtotal = unitPrice * item.qty;
+                const cardBorder = isSelected
+                    ? 'border-brand-600 ring-2 ring-brand-600/20 bg-brand-50/20'
+                    : 'border-slate-200 hover:border-slate-300 bg-white';
+
+                return `
+                <div id="card-${item.pageNum}" class="group relative rounded-2xl border ${cardBorder} overflow-hidden transition-all duration-150 flex flex-col shadow-2xs hover:shadow-md">
+
+                    <!-- Top Overlay Controls: Checkbox & Zoom -->
+                    <div class="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between pointer-events-none">
+                        <button type="button" onclick="toggleSelectItem(${item.pageNum})"
+                            class="pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold shadow-sm transition ${isSelected ? 'bg-brand-600 text-white' : 'bg-white/95 text-slate-700 hover:bg-brand-50 border border-slate-200'}">
+                            <i data-lucide="${isSelected ? 'check-square' : 'square'}" class="w-3.5 h-3.5"></i>
+                            <span>Pg ${item.pageNum}</span>
+                        </button>
+
+                        <button type="button" onclick="openPreviewModal(${item.pageNum})" title="Inspect High-Res Page"
+                            class="pointer-events-auto p-2 rounded-xl bg-white/95 hover:bg-slate-900 hover:text-white text-slate-700 border border-slate-200 shadow-sm transition">
+                            <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+
+                    <!-- Thumbnail Preview Area (Clicking toggles selection) -->
+                    <div onclick="toggleSelectItem(${item.pageNum})" class="relative aspect-[3/4] bg-slate-100 cursor-pointer overflow-hidden flex items-center justify-center border-b border-slate-100">
+                        <div id="thumb-skel-${item.pageNum}" class="${item.thumbDataUrl ? 'hidden' : 'flex'} flex-col items-center justify-center text-slate-400 gap-2">
+                            <div class="w-5 h-5 border-2 border-slate-300 border-t-brand-600 rounded-full animate-spin"></div>
+                            <span class="text-[11px] font-medium">Page ${item.pageNum}</span>
+                        </div>
+                        <img id="thumb-img-${item.pageNum}" src="${item.thumbDataUrl || ''}" alt="Catalog Page ${item.pageNum}"
+                            class="${item.thumbDataUrl ? '' : 'hidden'} w-full h-full object-contain p-2 transition-transform duration-200 group-hover:scale-[1.02]" />
+                    </div>
+
+                    <!-- Card Metadata & Inline Ordering Controls -->
+                    <div class="p-3.5 flex-1 flex flex-col justify-between gap-2.5 bg-white">
+                        <div>
+                            <div class="flex items-center justify-between gap-2">
+                                <input type="text" value="${escapeHtml(item.sku)}" onchange="updateItemSKU(${item.pageNum}, this.value)"
+                                    aria-label="SKU for page ${item.pageNum}"
+                                    class="text-xs font-bold text-slate-900 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-brand-500 focus:outline-none w-full py-0.5 truncate" />
+                                ${item.notes ? `<span title="${escapeHtml(item.notes)}" class="shrink-0 w-2 h-2 rounded-full bg-amber-500"></span>` : ''}
+                            </div>
+                            <p class="text-[11px] text-slate-400 truncate mt-0.5">
+                                ${item.notes ? escapeHtml(item.notes) : (item.extractedText ? escapeHtml(item.extractedText.slice(0, 48)) : 'Click image to select')}
+                            </p>
+                        </div>
+
+                        <!-- Interactive Unit Price Input & Line Subtotal -->
+                        <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
+                            <div class="relative flex items-center flex-1 max-w-[125px]">
+                                <span class="absolute left-2.5 text-xs font-bold text-slate-400 pointer-events-none">${state.currency}</span>
+                                <input type="number" min="0" step="0.01"
+                                    value="${unitPrice > 0 ? unitPrice : ''}"
+                                    placeholder="0.00"
+                                    onchange="updateItemPrice(${item.pageNum}, this.value)"
+                                    onclick="event.stopPropagation()"
+                                    aria-label="Unit price for page ${item.pageNum}"
+                                    class="w-full pl-6 pr-2 py-1 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition" />
+                            </div>
+                            <div class="text-right">
+                                <span class="block text-[9px] uppercase tracking-wider font-semibold text-slate-400 leading-none">Total</span>
+                                <span id="card-subtotal-${item.pageNum}" class="text-xs font-extrabold ${isSelected && lineSubtotal > 0 ? 'text-emerald-600' : 'text-slate-700'}">
+                                    ${formatMoney(isSelected ? lineSubtotal : unitPrice)}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Quantity Controls or Quick Add -->
+                        ${isSelected ? `
+                        <div class="flex items-center justify-between gap-1.5 pt-0.5">
+                            <div class="flex items-center border border-slate-200 rounded-xl bg-slate-50 overflow-hidden">
+                                <button type="button" onclick="updateItemQty(${item.pageNum}, ${item.qty - 1})" class="px-2.5 py-1.5 text-slate-600 hover:bg-slate-200 font-bold text-xs transition">-</button>
+                                <input type="number" min="1" value="${item.qty}" onchange="updateItemQty(${item.pageNum}, parseInt(this.value) || 1)"
+                                    class="w-10 text-center text-xs font-bold bg-transparent focus:outline-none" />
+                                <button type="button" onclick="updateItemQty(${item.pageNum}, ${item.qty + 1})" class="px-2.5 py-1.5 text-slate-600 hover:bg-slate-200 font-bold text-xs transition">+</button>
+                            </div>
+                            <button type="button" onclick="openPreviewModal(${item.pageNum})" class="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-brand-600 bg-slate-100 hover:bg-brand-50 rounded-xl transition">
+                                Note
+                            </button>
+                        </div>
+                        ` : `
+                        <button type="button" onclick="toggleSelectItem(${item.pageNum})" class="w-full py-1.5 px-3 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-brand-600 hover:text-white rounded-xl transition flex items-center justify-center gap-1.5">
+                            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                            <span>Select Item</span>
+                        </button>
+                        `}
+                    </div>
+                </div>
+                `;
+            }).join('');
+
+            lucide.createIcons();
+            updateOrderSummary();
+        }
+
+        function getFilteredItems() {
+            return state.items.filter(item => {
+                if (state.filterMode === 'selected' && !item.selected) return false;
+                if (state.filterMode === 'priced' && (Number(item.price) || 0) <= 0) return false;
+                if (state.searchQuery) {
+                    const q = state.searchQuery;
+                    const matchPage = `page ${item.pageNum}`.includes(q) || String(item.pageNum) === q;
+                    const matchSku = item.sku.toLowerCase().includes(q);
+                    const matchNotes = item.notes.toLowerCase().includes(q);
+                    const matchText = item.extractedText.toLowerCase().includes(q);
+                    const matchPrice = String(item.price || '').includes(q);
+                    return matchPage || matchSku || matchNotes || matchText || matchPrice;
+                }
+                return true;
+            });
+        }
+
+        // Item Selection & Mutation Handlers
+        function toggleSelectItem(pageNum) {
+            const item = state.items.find(i => i.pageNum === pageNum);
+            if (!item) return;
+            item.selected = !item.selected;
+            if (item.selected && item.qty < 1) item.qty = 1;
+            renderGrid();
+        }
+
+        function updateItemPrice(pageNum, rawVal) {
+            const item = state.items.find(i => i.pageNum === pageNum);
+            if (!item) return;
+            const parsed = Math.max(0, parseFloat(rawVal) || 0);
+            item.price = parsed;
+            renderGrid();
+        }
+
+        function updateItemQty(pageNum, newQty) {
+            const item = state.items.find(i => i.pageNum === pageNum);
+            if (!item) return;
+            if (newQty <= 0) {
+                item.selected = false;
+                item.qty = 1;
+            } else {
+                item.qty = newQty;
+                item.selected = true;
+            }
+            renderGrid();
+        }
+
+        function updateItemSKU(pageNum, newSku) {
+            const item = state.items.find(i => i.pageNum === pageNum);
+            if (!item) return;
+            item.sku = newSku.trim() || `ITEM-${String(pageNum).padStart(3, '0')}`;
+            updateOrderSummary();
+        }
+
+        function selectAllVisible() {
+            const visible = getFilteredItems();
+            visible.forEach(item => {
+                item.selected = true;
+                if (item.qty < 1) item.qty = 1;
+            });
+            renderGrid();
+            showToast(`Selected ${visible.length} catalog items`, 'info');
+        }
+
+        function clearSelection() {
+            state.items.forEach(item => {
+                item.selected = false;
+            });
+            renderGrid();
+            showToast('Cleared all selections', 'info');
+        }
+
+        function handleSearch(val) {
+            state.searchQuery = val.trim().toLowerCase();
+            renderGrid();
+        }
+
+        function setFilterMode(mode) {
+            state.filterMode = mode;
+            const tabs = ['all', 'selected', 'priced'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`filter-${t}`);
+                if (!btn) return;
+                if (t === mode) {
+                    btn.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-900 shadow-sm transition';
+                } else {
+                    btn.className = 'px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-900 transition';
+                }
+            });
+            renderGrid();
+        }
+
+        function setGridDensity(density) {
+            state.gridDensity = density;
+            const grid = document.getElementById('catalog-grid');
+            const btnComf = document.getElementById('density-comfortable');
+            const btnComp = document.getElementById('density-compact');
+
+            if (density === 'compact') {
+                grid.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3.5';
+                btnComp.className = 'p-1.5 rounded-lg bg-white text-slate-900 shadow-sm transition';
+                btnComf.className = 'p-1.5 rounded-lg text-slate-500 hover:text-slate-900 transition';
+            } else {
+                grid.className = 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5';
+                btnComf.className = 'p-1.5 rounded-lg bg-white text-slate-900 shadow-sm transition';
+                btnComp.className = 'p-1.5 rounded-lg text-slate-500 hover:text-slate-900 transition';
+            }
+        }
+
+        // Order Summary Cart Sidebar Updater
+        function updateOrderSummary() {
+            const selectedItems = state.items.filter(i => i.selected);
+            const totalUnits = selectedItems.reduce((sum, i) => sum + i.qty, 0);
+            const totalBudget = selectedItems.reduce((sum, i) => sum + ((Number(i.price) || 0) * i.qty), 0);
+
+            document.getElementById('summary-item-count').textContent = selectedItems.length;
+            document.getElementById('summary-total-units').textContent = totalUnits;
+            document.getElementById('footer-item-count').textContent = selectedItems.length;
+            document.getElementById('footer-unit-count').textContent = totalUnits;
+            document.getElementById('mobile-badge').textContent = selectedItems.length;
+
+            // Update Budget Displays across Header, Mobile Toggle & Drawer
+            const formattedBudget = formatMoney(totalBudget);
+            document.getElementById('header-budget-total').textContent = formattedBudget;
+            document.getElementById('drawer-grand-total').textContent = formattedBudget;
+            document.getElementById('mobile-budget-label').textContent = `${state.currency}${Math.round(totalBudget).toLocaleString('en-US')}`;
+
+            // Enable/disable export buttons
+            const exportBtns = ['btn-export-csv', 'btn-export-json', 'btn-copy-order', 'btn-print-order'];
+            exportBtns.forEach(id => {
+                document.getElementById(id).disabled = selectedItems.length === 0;
+            });
+
+            const listContainer = document.getElementById('cart-items-list');
+            const emptyState = document.getElementById('empty-cart-state');
+
+            if (selectedItems.length === 0) {
+                emptyState.classList.remove('hidden');
+                Array.from(listContainer.children).forEach(child => {
+                    if (child.id !== 'empty-cart-state') child.remove();
+                });
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+
+            const cardsHtml = selectedItems.map(item => {
+                const unitPrice = Number(item.price) || 0;
+                const lineTotal = unitPrice * item.qty;
+
+                return `
+                <div class="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center gap-3 group">
+                    <img src="${item.thumbDataUrl || ''}" onclick="openPreviewModal(${item.pageNum})"
+                        class="w-12 h-16 object-contain bg-white rounded-lg border border-slate-200 shrink-0 cursor-pointer" alt="Page ${item.pageNum}" />
+
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center justify-between gap-1">
+                            <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(item.sku)}</span>
+                            <span class="text-[11px] font-semibold text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded-md shrink-0">Pg ${item.pageNum}</span>
+                        </div>
+                        <div class="flex items-center justify-between text-[11px] text-slate-500 mt-0.5">
+                            <span>${formatMoney(unitPrice)} × ${item.qty}</span>
+                            <span class="font-bold text-emerald-700">${formatMoney(lineTotal)}</span>
+                        </div>
+                        ${item.notes ? `<p class="text-[11px] text-slate-400 truncate mt-0.5">${escapeHtml(item.notes)}</p>` : ''}
+
+                        <div class="flex items-center justify-between mt-2">
+                            <div class="flex items-center border border-slate-200 bg-white rounded-lg overflow-hidden">
+                                <button onclick="updateItemQty(${item.pageNum}, ${item.qty - 1})" class="px-2 py-0.5 text-xs font-bold text-slate-600 hover:bg-slate-100">-</button>
+                                <span class="px-2 text-xs font-bold text-slate-900">${item.qty}</span>
+                                <button onclick="updateItemQty(${item.pageNum}, ${item.qty + 1})" class="px-2 py-0.5 text-xs font-bold text-slate-600 hover:bg-slate-100">+</button>
+                            </div>
+                            <button onclick="toggleSelectItem(${item.pageNum})" class="text-slate-400 hover:text-rose-600 p-1 rounded-lg transition" title="Remove from order">
+                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            }).join('');
+
+            listContainer.innerHTML = '';
+            listContainer.appendChild(emptyState);
+            listContainer.insertAdjacentHTML('beforeend', cardsHtml);
+            lucide.createIcons();
+        }
+
+        // High-Resolution Inspection Lightbox Modal
+        async function openPreviewModal(pageNum) {
+            const item = state.items.find(i => i.pageNum === pageNum);
+            if (!item) return;
+
+            state.activeModalPage = pageNum;
+            state.modalZoom = 1.0;
+
+            const modal = document.getElementById('preview-modal');
+            const imgEl = document.getElementById('modal-page-img');
+            const loader = document.getElementById('modal-loader');
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+
+            // Populate form fields
+            document.getElementById('modal-page-badge').textContent = `Page ${pageNum}`;
+            document.getElementById('modal-nav-indicator').textContent = `${pageNum} / ${state.totalPages}`;
+            document.getElementById('modal-item-title').textContent = `Catalog Page #${pageNum}`;
+            document.getElementById('modal-sku-input').value = item.sku;
+            document.getElementById('modal-currency-symbol').textContent = state.currency;
+            document.getElementById('modal-price-input').value = item.price > 0 ? item.price : '';
+            document.getElementById('modal-qty-input').value = item.qty;
+            document.getElementById('modal-notes-input').value = item.notes;
+            document.getElementById('zoom-level-label').textContent = '100%';
+            imgEl.style.transform = 'scale(1)';
+            updateModalSubtotalPreview();
+
+            // Show thumbnail immediately while rendering high-res version
+            imgEl.src = item.thumbDataUrl || '';
+
+            if (state.pdfDoc) {
+                loader.classList.remove('hidden');
+                loader.classList.add('flex');
+                try {
+                    const page = await state.pdfDoc.getPage(pageNum);
+                    const viewport = page.getViewport({ scale: 1.8 });
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                    if (state.activeModalPage === pageNum) {
+                        imgEl.src = canvas.toDataURL('image/png');
+                    }
+                } catch (err) {
+                    console.warn('HD render error:', err);
+                } finally {
+                    loader.classList.add('hidden');
+                    loader.classList.remove('flex');
+                }
+            } else if (item.demoData) {
+                imgEl.src = generateDemoPageDataUrl(pageNum, item.demoData, 2);
+            }
+
+            lucide.createIcons();
+        }
+
+        function closePreviewModal() {
+            const modal = document.getElementById('preview-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            state.activeModalPage = null;
+        }
+
+        function navigateModalPage(delta) {
+            if (!state.activeModalPage) return;
+            const target = state.activeModalPage + delta;
+            if (target >= 1 && target <= state.totalPages) {
+                openPreviewModal(target);
+            }
+        }
+
+        function adjustModalZoom(delta) {
+            state.modalZoom = Math.min(2.5, Math.max(0.75, state.modalZoom + delta));
+            const imgEl = document.getElementById('modal-page-img');
+            imgEl.style.transform = `scale(${state.modalZoom})`;
+            document.getElementById('zoom-level-label').textContent = `${Math.round(state.modalZoom * 100)}%`;
+        }
+
+        function stepModalQty(delta) {
+            const input = document.getElementById('modal-qty-input');
+            const val = Math.max(1, (parseInt(input.value) || 1) + delta);
+            input.value = val;
+            updateModalSubtotalPreview();
+        }
+
+        function updateModalSubtotalPreview() {
+            const price = Math.max(0, parseFloat(document.getElementById('modal-price-input').value) || 0);
+            const qty = Math.max(1, parseInt(document.getElementById('modal-qty-input').value) || 1);
+            document.getElementById('modal-line-subtotal').textContent = formatMoney(price * qty);
+        }
+
+        function saveAndToggleFromModal() {
+            const item = state.items.find(i => i.pageNum === state.activeModalPage);
+            if (!item) return;
+
+            item.sku = document.getElementById('modal-sku-input').value.trim() || `ITEM-${String(item.pageNum).padStart(3, '0')}`;
+            item.price = Math.max(0, parseFloat(document.getElementById('modal-price-input').value) || 0);
+            item.qty = Math.max(1, parseInt(document.getElementById('modal-qty-input').value) || 1);
+            item.notes = document.getElementById('modal-notes-input').value.trim();
+            item.selected = true;
+
+            renderGrid();
+            closePreviewModal();
+            showToast(`Saved Page ${item.pageNum} (${item.sku}) · ${formatMoney(item.price * item.qty)}`, 'success');
+        }
+
+        // Mobile Cart Drawer Toggle
+        function toggleDrawer(open) {
+            const drawer = document.getElementById('order-drawer');
+            const backdrop = document.getElementById('drawer-backdrop');
+            if (open) {
+                drawer.classList.remove('translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                drawer.classList.add('translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        // Export & Copy Utilities
+        function getOrderPayload() {
+            const reference = document.getElementById('order-reference').value.trim() || 'UNSPECIFIED-REF';
+            const selected = state.items.filter(i => i.selected);
+            const grandTotalBudget = selected.reduce((s, i) => s + ((Number(i.price) || 0) * i.qty), 0);
+
+            return {
+                orderReference: reference,
+                catalogFile: state.fileName,
+                currency: state.currency,
+                generatedAt: new Date().toISOString(),
+                totalLineItems: selected.length,
+                totalUnits: selected.reduce((s, i) => s + i.qty, 0),
+                grandTotalBudget: Number(grandTotalBudget.toFixed(2)),
+                items: selected.map(i => {
+                    const unitPrice = Number(i.price) || 0;
+                    return {
+                        pageNumber: i.pageNum,
+                        sku: i.sku,
+                        unitPrice: Number(unitPrice.toFixed(2)),
+                        quantity: i.qty,
+                        lineTotal: Number((unitPrice * i.qty).toFixed(2)),
+                        notes: i.notes
+                    };
+                })
+            };
+        }
+
+        function exportOrderCSV() {
+            const payload = getOrderPayload();
+            const headers = ['Order Reference', 'Catalog File', 'Currency', 'Page Number', 'SKU', 'Unit Price', 'Quantity', 'Line Total', 'Notes'];
+            const rows = payload.items.map(item => [
+                `"${payload.orderReference.replace(/"/g, '""')}"`,
+                `"${payload.catalogFile.replace(/"/g, '""')}"`,
+                `"${payload.currency}"`,
+                item.pageNumber,
+                `"${item.sku.replace(/"/g, '""')}"`,
+                item.unitPrice.toFixed(2),
+                item.quantity,
+                item.lineTotal.toFixed(2),
+                `"${item.notes.replace(/"/g, '""')}"`
+            ]);
+
+            // Append Grand Total Summary Row
+            rows.push(['', '', `"${payload.currency}"`, '', '"GRAND TOTAL"', '', payload.totalUnits, payload.grandTotalBudget.toFixed(2), '']);
+
+            const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+            downloadFile(csvContent, `Order_${payload.orderReference.replace(/\s+/g, '_')}.csv`, 'text/csv;charset=utf-8;');
+            showToast('CSV order file with pricing downloaded!', 'success');
+        }
+
+        function exportOrderJSON() {
+            const payload = getOrderPayload();
+            const jsonStr = JSON.stringify(payload, null, 2);
+            downloadFile(jsonStr, `Order_${payload.orderReference.replace(/\s+/g, '_')}.json`, 'application/json');
+            showToast('JSON order file downloaded!', 'success');
+        }
+
+        function copyOrderClipboard() {
+            const payload = getOrderPayload();
+            const lines = [
+                `ORDER SUMMARY — ${payload.orderReference}`,
+                `Catalog: ${payload.catalogFile}`,
+                `Total Items: ${payload.totalLineItems} | Total Units: ${payload.totalUnits} | Total Budget: ${formatMoney(payload.grandTotalBudget)}`,
+                `----------------------------------------`,
+                ...payload.items.map(i => `• Page ${i.pageNumber} | ${i.sku} | ${formatMoney(i.unitPrice)} × ${i.quantity} = ${formatMoney(i.lineTotal)}${i.notes ? ` (${i.notes})` : ''}`),
+                `----------------------------------------`,
+                `GRAND TOTAL BUDGET: ${formatMoney(payload.grandTotalBudget)}`
+            ];
+            const textToCopy = lines.join('\n');
+
+            const textArea = document.createElement('textarea');
+            textArea.value = textToCopy;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showToast('Order summary & budget copied to clipboard!', 'success');
+            } catch (err) {
+                showToast('Failed to copy text.', 'error');
+            }
+            document.body.removeChild(textArea);
+        }
+
+        function openPrintSummary() {
+            const payload = getOrderPayload();
+            const selectedItems = state.items.filter(i => i.selected);
+
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                showToast('Please allow pop-ups to open the printable order sheet.', 'error');
+                return;
+            }
+
+            const rowsHtml = selectedItems.map(item => {
+                const unitPrice = Number(item.price) || 0;
+                const lineTotal = unitPrice * item.qty;
+                return `
+                <tr>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0;">
+                        <img src="${item.thumbDataUrl || ''}" style="width:48px; height:64px; object-fit:contain; border:1px solid #cbd5e1; border-radius:4px;" />
+                    </td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0; font-weight:600;">Page ${item.pageNum}</td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0; font-family:monospace; font-weight:700;">${escapeHtml(item.sku)}</td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0;">${formatMoney(unitPrice)}</td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0; font-weight:700;">${item.qty}</td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0; font-weight:700; color:#047857;">${formatMoney(lineTotal)}</td>
+                    <td style="padding:10px; border-bottom:1px solid #e2e8f0; color:#475569;">${escapeHtml(item.notes || '—')}</td>
+                </tr>
+            `;
+            }).join('');
+
+            printWindow.document.write([
+                '<!DOCTYPE html>',
+                '<html>',
+                '<head>',
+                `<title>Order Sheet - ${escapeHtml(payload.orderReference)}</title>`,
+                '<style>',
+                'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; padding: 32px; max-width: 960px; margin: 0 auto; }',
+                '.header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #0f172a; padding-bottom: 16px; margin-bottom: 24px; }',
+                'table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }',
+                'th { background: #f8fafc; padding: 10px; border-bottom: 2px solid #cbd5e1; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; color: #475569; }',
+                '.total-bar { margin-top: 20px; display: flex; justify-content: flex-end; }',
+                '.total-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px 24px; text-align: right; }',
+                '</style>',
+                '</head>',
+                '<body>',
+                '<div class="header">',
+                '<div>',
+                '<h1 style="margin:0; font-size:22px;">Catalog Purchase Order</h1>',
+                `<p style="margin:4px 0 0; color:#475569; font-size:13px;">Reference: <strong>${escapeHtml(payload.orderReference)}</strong> · Source: ${escapeHtml(payload.catalogFile)}</p>`,
+                '</div>',
+                '<div style="text-align:right; font-size:13px;">',
+                `<div>Date: ${new Date().toLocaleDateString()}</div>`,
+                `<div>Total Items: <strong>${payload.totalLineItems}</strong> · Total Units: <strong>${payload.totalUnits}</strong></div>`,
+                '</div>',
+                '</div>',
+                '<table>',
+                '<thead>',
+                '<tr>',
+                '<th>Preview</th>',
+                '<th>Page</th>',
+                '<th>SKU / Code</th>',
+                '<th>Unit Price</th>',
+                '<th>Qty</th>',
+                '<th>Line Total</th>',
+                '<th>Notes / Specs</th>',
+                '</tr>',
+                '</thead>',
+                `<tbody>${rowsHtml}</tbody>`,
+                '</table>',
+                '<div class="total-bar">',
+                '<div class="total-box">',
+                '<div style="font-size:11px; text-transform:uppercase; color:#64748b; font-weight:700;">Total Estimated Budget</div>',
+                `<div style="font-size:22px; font-weight:800; color:#047857; margin-top:4px;">${formatMoney(payload.grandTotalBudget)}</div>`,
+                '</div>',
+                '</div>',
+                '<scr' + 'ipt>window.onload = function() { window.print(); };</scr' + 'ipt>',
+                '</body>',
+                '</html>'
+            ].join('\n'));
+            printWindow.document.close();
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // Helper: Safe HTML Escaping
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        // Helper: Non-Blocking Toast Notification
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bg = type === 'error' ? 'bg-rose-600' : type === 'success' ? 'bg-emerald-600' : 'bg-slate-900';
+            toast.className = `${bg} text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg transition-all duration-200 transform translate-y-2 opacity-0`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 200);
+            }, 2800);
+        }
+
+        // Keyboard shortcuts for Lightbox Modal
+        document.addEventListener('keydown', (e) => {
+            if (!state.activeModalPage) return;
+            if (e.key === 'Escape') closePreviewModal();
+            if (e.key === 'ArrowLeft') navigateModalPage(-1);
+            if (e.key === 'ArrowRight') navigateModalPage(1);
+        });
+    </script>
+</body>
+</html>
