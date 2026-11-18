@@ -3,6 +3,8 @@ const KEYS = {
   cart: "deodap.cart",
   favs: "deodap.favs",
   orders: "deodap.orders",
+  firebase: "deodap.firebaseConfig",
+  firebaseOff: "deodap.firebaseOff",
 }
 
 const rupees = new Intl.NumberFormat("en-IN", {
@@ -35,8 +37,193 @@ function load(key, fallback) {
   }
 }
 
-function save(key, value) {
+function save(key, value, syncCloud = true) {
   localStorage.setItem(key, JSON.stringify(value))
+  if (syncCloud && key !== KEYS.firebase) scheduleCloudWrite()
+}
+
+const cloud = {
+  db: null,
+  unsub: null,
+  status: "local",
+  error: "",
+  projectId: "",
+  writing: false,
+  applying: false,
+  timer: null,
+}
+
+function cloudLabel() {
+  if (cloud.status === "live") return `Cloud connected · ${cloud.projectId}`
+  if (cloud.status === "connecting") return "Connecting to Firebase…"
+  if (cloud.status === "error") return `Firebase error · ${cloud.error}`
+  return "Local only · this browser. GitHub does not save catalog, cart, or orders."
+}
+
+function explainFirebaseError(error) {
+  const code = error?.code || ""
+  const message = error instanceof Error ? error.message : String(error || "Could not connect to Firebase.")
+  if (code === "permission-denied" || /permission/i.test(message)) {
+    return "Firestore blocked the write. In Firebase Console → Firestore → Rules, publish allow read, write for /deodap/{document=**}, then click Connect again."
+  }
+  if (/NOT_FOUND|404|does not exist/i.test(message) || code === "not-found") {
+    return "Firestore is not created yet. Firebase Console → Build → Firestore Database → Create database (test mode)."
+  }
+  if (/API has not been used|Cloud Firestore API is not available/i.test(message)) {
+    return "Enable Cloud Firestore for this project, wait a minute, then connect again."
+  }
+  return message
+}
+
+function parseLooseObject(text) {
+  const cleaned = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/^\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*/, "")
+    .replace(/;+\s*$/, "")
+  try {
+    return JSON.parse(cleaned)
+  } catch {}
+  const quoted = cleaned.replace(/([,{]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":')
+  try {
+    return JSON.parse(quoted)
+  } catch {}
+  throw new Error("Could not read that config. Paste the firebaseConfig { apiKey, projectId, ... } object.")
+}
+
+function parseFirebaseConfig(text) {
+  let parsed = parseLooseObject(text)
+  if (parsed && parsed.firebaseConfig) parsed = parsed.firebaseConfig
+  if (!parsed || typeof parsed !== "object") throw new Error("Paste the Firebase web config object.")
+  if (!parsed.apiKey || !parsed.projectId) throw new Error("Config must include apiKey and projectId.")
+  return {
+    apiKey: String(parsed.apiKey),
+    authDomain: String(parsed.authDomain || `${parsed.projectId}.firebaseapp.com`),
+    projectId: String(parsed.projectId),
+    storageBucket: String(parsed.storageBucket || ""),
+    messagingSenderId: String(parsed.messagingSenderId || ""),
+    appId: String(parsed.appId || ""),
+  }
+}
+
+function applyCloudState(data) {
+  if (!data || typeof data !== "object") return
+  cloud.applying = true
+  if (Array.isArray(data.catalog)) save(KEYS.catalog, data.catalog, false)
+  if (Array.isArray(data.cart)) save(KEYS.cart, data.cart, false)
+  if (Array.isArray(data.favs)) save(KEYS.favs, data.favs, false)
+  if (Array.isArray(data.orders)) save(KEYS.orders, data.orders, false)
+  cloud.applying = false
+}
+
+async function pushCloudNow() {
+  if (!cloud.db) return
+  cloud.writing = true
+  try {
+    await cloud.db.collection("deodap").doc("state").set({
+      catalog: load(KEYS.catalog, []),
+      cart: load(KEYS.cart, []),
+      favs: load(KEYS.favs, []),
+      orders: load(KEYS.orders, []),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    })
+  } finally {
+    setTimeout(() => {
+      cloud.writing = false
+    }, 500)
+  }
+}
+
+function scheduleCloudWrite() {
+  if (!cloud.db || cloud.applying) return
+  clearTimeout(cloud.timer)
+  cloud.timer = setTimeout(() => {
+    pushCloudNow().catch((error) => {
+      cloud.status = "error"
+      cloud.error = explainFirebaseError(error)
+      render()
+    })
+  }, 400)
+}
+
+function firebaseConfigToUse() {
+  if (load(KEYS.firebaseOff, false)) return null
+  const saved = load(KEYS.firebase, null)
+  const baked = window.DEODAP_FIREBASE
+  const raw = saved && saved.apiKey ? saved : baked
+  if (!raw || !raw.apiKey) return null
+  try {
+    return parseFirebaseConfig(JSON.stringify(raw))
+  } catch {
+    return null
+  }
+}
+
+async function connectFirebase() {
+  const cfg = firebaseConfigToUse()
+  if (!cfg || !cfg.apiKey) {
+    cloud.status = "local"
+    cloud.projectId = ""
+    cloud.error = ""
+    return
+  }
+  if (!window.firebase) {
+    cloud.status = "error"
+    cloud.error = "Firebase SDK did not load. Check the network."
+    return
+  }
+  cloud.status = "connecting"
+  cloud.projectId = cfg.projectId
+  try {
+    if (cloud.unsub) {
+      cloud.unsub()
+      cloud.unsub = null
+    }
+    if (firebase.apps.length) await firebase.app().delete()
+    firebase.initializeApp(cfg)
+    cloud.db = firebase.firestore()
+    const ref = cloud.db.collection("deodap").doc("state")
+    const snap = await ref.get()
+    if (snap.exists) applyCloudState(snap.data())
+    else await pushCloudNow()
+    cloud.unsub = ref.onSnapshot(
+      (docSnap) => {
+        if (!docSnap.exists || cloud.writing) return
+        applyCloudState(docSnap.data())
+        render()
+      },
+      (error) => {
+        cloud.status = "error"
+        cloud.error = explainFirebaseError(error)
+        render()
+      }
+    )
+    cloud.status = "live"
+    cloud.error = ""
+  } catch (error) {
+    cloud.status = "error"
+    cloud.error = explainFirebaseError(error)
+    cloud.db = null
+  }
+}
+
+async function saveFirebaseConfig(text) {
+  const cfg = parseFirebaseConfig(text)
+  localStorage.removeItem(KEYS.firebaseOff)
+  localStorage.setItem(KEYS.firebase, JSON.stringify(cfg))
+  await connectFirebase()
+}
+
+function disconnectFirebase() {
+  if (cloud.unsub) cloud.unsub()
+  cloud.unsub = null
+  cloud.db = null
+  cloud.status = "local"
+  cloud.error = ""
+  cloud.projectId = ""
+  localStorage.setItem(KEYS.firebaseOff, JSON.stringify(true))
+  localStorage.removeItem(KEYS.firebase)
+  if (window.firebase && firebase.apps.length) firebase.app().delete().catch(() => {})
 }
 
 function repair(text) {
@@ -522,18 +709,49 @@ function orderPage(id) {
   `
 }
 
+const FIRESTORE_RULES = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /deodap/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}`
+
 const accountUi = {
   importPaste: "",
   addPaste: "",
+  firebasePaste: "",
   importMsg: { className: "msg", text: "" },
   addMsg: { className: "msg", text: "" },
+  firebaseMsg: { className: "msg", text: "" },
 }
 
 function accountPage() {
+  const cfg = firebaseConfigToUse() || load(KEYS.firebase, null)
+  const savedCfg = cfg ? JSON.stringify(cfg, null, 2) : accountUi.firebasePaste
   return `
     <h1>Account</h1>
+    <p class="${cloud.status === "live" ? "cloud-pill live" : cloud.status === "error" ? "cloud-pill error" : "cloud-pill"}">${esc(cloudLabel())}</p>
     <p class="sub">Paste a Shopify cart JSON like <strong>test.json</strong>: { "items": [ { "sku", "title", "price", "image", ... } ] }. Unique id is each item's sku.</p>
     <div class="account-box">
+      <section class="drop">
+        <h2>Firebase (cloud save)</h2>
+        <p class="meta">GitHub only hosts files. Catalog, cart, favourites, and orders live in this browser until you connect Firestore.</p>
+        <ol class="guide">
+          <li>Open <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer">Firebase Console</a> and create a project (or pick one).</li>
+          <li>Build → <strong>Firestore Database</strong> → Create database → start in <strong>test mode</strong>.</li>
+          <li>Project settings (gear) → Your apps → Web (<strong>&lt;/&gt;</strong>) → copy the <code>firebaseConfig</code> object.</li>
+          <li>Firestore → Rules → paste the rules below → Publish.</li>
+          <li>Paste the config here and click <strong>Connect Firebase</strong>.</li>
+        </ol>
+        <pre class="rules">${esc(FIRESTORE_RULES)}</pre>
+        <p class="meta">Anyone with this web app and these open rules can read/write <code>deodap/state</code>. Lock this down with sign-in later.</p>
+        <textarea id="firebase-paste" class="json-paste" spellcheck="false" placeholder='{ apiKey: "...", projectId: "...", appId: "..." }'>${esc(savedCfg)}</textarea>
+        <button type="button" class="btn primary" id="firebase-connect">Connect Firebase</button>
+        ${cfg ? `<button type="button" class="btn ghost" id="firebase-disconnect">Disconnect</button>` : ""}
+        <p class="${esc(accountUi.firebaseMsg.className)}" id="firebase-msg">${esc(accountUi.firebaseMsg.text)}</p>
+      </section>
       <section class="drop">
         <h2>Import JSON</h2>
         <p class="meta">Paste JSON and import. This replaces the homepage list.</p>
@@ -649,7 +867,42 @@ function render() {
   if (importBtn) importBtn.addEventListener("click", () => applyPastedJson("import"))
   const addBtn = document.getElementById("add-json")
   if (addBtn) addBtn.addEventListener("click", () => applyPastedJson("add"))
+
+  const firebasePaste = document.getElementById("firebase-paste")
+  if (firebasePaste) firebasePaste.addEventListener("input", () => { accountUi.firebasePaste = firebasePaste.value })
+  const firebaseConnect = document.getElementById("firebase-connect")
+  if (firebaseConnect) {
+    firebaseConnect.addEventListener("click", async () => {
+      const text = (document.getElementById("firebase-paste")?.value || "").trim()
+      accountUi.firebasePaste = text
+      try {
+        await saveFirebaseConfig(text)
+        accountUi.firebaseMsg = {
+          className: cloud.status === "live" ? "msg ok" : "msg err",
+          text: cloud.status === "live"
+            ? `Connected. Catalog, cart, favourites, and orders are stored in the cloud (project ${cloud.projectId}, document deodap/state).`
+            : cloud.error || "Could not connect.",
+        }
+      } catch (error) {
+        accountUi.firebaseMsg = {
+          className: "msg err",
+          text: error instanceof Error ? error.message : "Invalid Firebase config.",
+        }
+      }
+      render()
+    })
+  }
+  const firebaseDisconnect = document.getElementById("firebase-disconnect")
+  if (firebaseDisconnect) {
+    firebaseDisconnect.addEventListener("click", () => {
+      disconnectFirebase()
+      accountUi.firebasePaste = ""
+      accountUi.firebaseMsg = { className: "msg", text: "Disconnected. Data stays in this browser only." }
+      render()
+    })
+  }
 }
 
 window.addEventListener("hashchange", render)
 render()
+connectFirebase().finally(() => render())
